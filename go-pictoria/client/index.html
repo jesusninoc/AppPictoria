@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>Pictoria | Arte colaborativo</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      background-color: #f0e5de;
+      font-family: Arial, sans-serif;
+    }
+
+    header {
+      width: 100%;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 40px;
+      background-color: #fff3e0;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      position: absolute;
+      top: 0;
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 24px;
+      color: #333;
+    }
+
+    header p {
+      margin: 0;
+      font-size: 18px;
+      color: #666;
+    }
+
+    #canvas {
+      border: 1px solid #000;
+      max-width: 100%;
+      max-height: calc(100vh - 120px);
+      background-color: #fff;
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    }
+
+    #controls {
+      margin-top: 10px;
+    }
+
+    button {
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
+      background-color: #d59c56;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      margin-right: 10px;
+    }
+
+    button:hover {
+      background-color: #ff9900;
+    }
+
+    footer {
+      width: 100%;
+      padding: 5px 20px;
+      background-color: #fff3e0;
+      text-align: center;
+      position: absolute;
+      bottom: 0;
+      box-shadow: 0 -2px 4px rgba(0, 0, 0, 0.1);
+      font-size: 14px;
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1 style="margin-left: 20px;">Pictoria</h1>
+    <p style="margin-right: 20px;">Arte colaborativo en tiempo real</p>
+  </header>
+
+  <canvas id="canvas" width="800" height="600"></canvas>
+  
+  <div id="controls">
+    <button id="clearButton">Limpiar</button>
+    <button id="saveButton">Guardar</button>
+  </div>
+
+  <footer>
+    <p>Pictoria © 2024 . Todos los derechos reservados. Isabel Andaluz Fernández.</p>
+  </footer>
+
+  <script>
+    const MESSAGE_CONNECTED = 1;
+    const MESSAGE_USER_JOINED = 2;
+    const MESSAGE_USER_LEFT = 3;
+    const MESSAGE_STROKE = 4;
+    const MESSAGE_CLEAR = 5;
+
+    window.onload = function () {
+      const canvas = document.getElementById('canvas');
+      const ctx = canvas.getContext("2d");
+      let isDrawing = false;
+      let strokeColor = '';
+      let strokes = [];
+      const socket = new WebSocket("ws://localhost:3000/ws");
+      const otherColors = {};
+      const otherStrokes = {};
+
+      socket.onmessage = function (event) {
+        const messages = event.data.split('\n');
+        for (let i = 0; i < messages.length; i++) {
+          const message = JSON.parse(messages[i]);
+          onMessage(message);
+        }
+      };
+
+      function onMessage(message) {
+        switch (message.kind) {
+          case MESSAGE_CONNECTED:
+            strokeColor = message.color;
+            for (let i = 0; i < message.users.length; i++) {
+              const user = message.users[i];
+              otherColors[user.id] = user.color;
+              otherStrokes[user.id] = [];
+            }
+            break;
+          case MESSAGE_USER_JOINED:
+            otherColors[message.user.id] = message.user.color;
+            otherStrokes[message.user.id] = [];
+            break;
+          case MESSAGE_USER_LEFT:
+            delete otherColors[message.userId];
+            delete otherStrokes[message.userId];
+            update();
+            break;
+          case MESSAGE_STROKE:
+            if (message.finish) {
+              otherStrokes[message.userId].push(message.points);
+            } else {
+              const strokes = otherStrokes[message.userId];
+              strokes[strokes.length - 1] = strokes[strokes.length - 1].concat(message.points);
+            }
+            update();
+            break;
+          case MESSAGE_CLEAR:
+            otherStrokes[message.userId] = [];
+            update();
+            break;
+        }
+      }
+
+      canvas.onmousedown = function (event) {
+        isDrawing = true;
+        addPoint(event.pageX - this.offsetLeft, event.pageY - this.offsetTop, true);
+      };
+
+      canvas.onmousemove = function (event) {
+        if (isDrawing) {
+          addPoint(event.pageX - this.offsetLeft, event.pageY - this.offsetTop);
+        }
+      };
+
+      canvas.onmouseup = function () {
+        isDrawing = false;
+      };
+
+      canvas.onmouseleave = function () {
+        isDrawing = false;
+      };
+
+      function addPoint(x, y, newStroke) {
+        const p = { x: x, y: y };
+        if (newStroke) {
+          strokes.push([p]);
+        } else {
+          strokes[strokes.length - 1].push(p);
+        }
+        socket.send(JSON.stringify({ kind: MESSAGE_STROKE, points: [p], finish: newStroke }));
+        update();
+      }
+
+      function update() {
+        ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = 4;
+
+        ctx.strokeStyle = strokeColor;
+        drawStrokes(strokes);
+
+        const userIds = Object.keys(otherColors);
+        for (let i = 0; i < userIds.length; i++) {
+          const userId = userIds[i];
+          ctx.strokeStyle = otherColors[userId];
+          drawStrokes(otherStrokes[userId]);
+        }
+      }
+
+      function drawStrokes(strokes) {
+        for (let i = 0; i < strokes.length; i++) {
+          ctx.beginPath();
+          for (let j = 1; j < strokes[i].length; j++) {
+            const prev = strokes[i][j - 1];
+            const current = strokes[i][j];
+            ctx.moveTo(prev.x, prev.y);
+            ctx.lineTo(current.x, current.y);
+          }
+          ctx.closePath();
+          ctx.stroke();
+        }
+      }
+
+      document.getElementById('clearButton').onclick = function () {
+        strokes = [];
+        socket.send(JSON.stringify({ kind: MESSAGE_CLEAR }));
+        update();
+      };
+
+      document.getElementById('saveButton').onclick = function () {
+        const link = document.createElement('a');
+        link.href = canvas.toDataURL();
+        link.download = 'mural.png';
+        link.click();
+      };
+    };
+  </script>
+</body>
+
+</html>
